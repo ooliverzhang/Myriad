@@ -8,6 +8,9 @@ name: Build Myriad backend (Discord Gateway URL fix)
 #   wss://gateway.discord.gg 时，会拼成 wss://gateway.discord.gg?v=10...
 #   缺少根路径 /，Discord 返回 400，导致原生 Discord 机器人连不上。
 #
+# 说明：源码直接从上游 Myriad-You/Myriad 检出（不依赖 fork 的 tag），
+#       因为 GitHub fork 不会复制 tag，checkout v0.8.0 会失败。
+#
 # 触发方式：仓库 Actions 页面手动 Run workflow
 
 on:
@@ -17,6 +20,10 @@ on:
         description: 'Image tag to push'
         required: false
         default: 'v0.8.0-discord-fix'
+      source_repo:
+        description: 'Source repository (owner/name)'
+        required: false
+        default: 'Myriad-You/Myriad'
       source_ref:
         description: 'Source version (tag or commit)'
         required: false
@@ -37,12 +44,17 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
           df -h /
 
-      - name: Checkout source
+      - name: Checkout upstream source
         uses: actions/checkout@v4
         with:
+          repository: ${{ inputs.source_repo }}
           ref: ${{ inputs.source_ref }}
           submodules: recursive
-          fetch-depth: 1
+
+      - name: Show source revision
+        run: |
+          git log -1 --format='%H %s'
+          git submodule status
 
       - name: Apply Discord Gateway URL fix
         run: |
