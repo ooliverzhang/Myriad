@@ -1,0 +1,74 @@
+name: Build Myriad backend (Discord Gateway URL fix)
+
+# 在 CI 里编译打了 Discord Gateway 补丁的 Myriad backend 镜像，
+# 推送到 GitHub Container Registry (ghcr.io)，供服务器 docker pull。
+#
+# 修复内容：v0.8.0 的 backend/src/services/discord_bot.rs 中
+#   with_gateway_query() 在 Discord 返回不带尾部斜杠的
+#   wss://gateway.discord.gg 时，会拼成 wss://gateway.discord.gg?v=10...
+#   缺少根路径 /，Discord 返回 400，导致原生 Discord 机器人连不上。
+#
+# 触发方式：仓库 Actions 页面手动 Run workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to push'
+        required: false
+        default: 'v0.8.0-discord-fix'
+      source_ref:
+        description: 'Source version (tag or commit)'
+        required: false
+        default: 'v0.8.0'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 免费 runner 磁盘约 14G，Rust 全量构建会吃满，先腾空间
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Apply Discord Gateway URL fix
+        run: |
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpwYXRoID0gUGF0aCgnYmFja2VuZC9zcmMvc2VydmljZXMvZGlzY29yZF9ib3QucnMnKQpzcmMgPSBwYXRoLnJlYWRfdGV4dChlbmNvZGluZz0ndXRmLTgnKQoKbWFya2VyID0gJ2ZuIHdpdGhfZ2F0ZXdheV9xdWVyeSh1cmw6ICZzdHIpIC0+IFN0cmluZyB7JwpzdGFydCA9IHNyYy5maW5kKG1hcmtlcikKaWYgc3RhcnQgPT0gLTE6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCdFUlJPUjogd2l0aF9nYXRld2F5X3F1ZXJ5IG5vdCBmb3VuZCcpCmVuZCA9IHNyYy5maW5kKCdcbn1cbicsIHN0YXJ0KQppZiBlbmQgPT0gLTE6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCdFUlJPUjogZnVuY3Rpb24gZW5kIG5vdCBmb3VuZCcpCgpuZXdfZm4gPSAnJydmbiB3aXRoX2dhdGV3YXlfcXVlcnkodXJsOiAmc3RyKSAtPiBTdHJpbmcgewogICAgLy8gRGlzY29yZCdzIC9nYXRld2F5L2JvdCBtYXkgcmV0dXJuIGEgVVJMIHdpdGhvdXQgYSB0cmFpbGluZyBzbGFzaAogICAgLy8gKGUuZy4gYHdzczovL2dhdGV3YXkuZGlzY29yZC5nZ2ApLiBBcHBlbmRpbmcgYD92PS4uLmAgZGlyZWN0bHkgd291bGQKICAgIC8vIHByb2R1Y2UgYHdzczovL2dhdGV3YXkuZGlzY29yZC5nZz92PS4uLmAsIHdoaWNoIGxhY2tzIHRoZSByb290IHBhdGgKICAgIC8vIGFuZCBpcyByZWplY3RlZCBieSBEaXNjb3JkIHdpdGggSFRUUCA0MDAuIEZvcmNlIHRoZSByb290IHNsYXNoIGZpcnN0LgogICAgbGV0IGJhc2UgPSBpZiB1cmwuY29udGFpbnMoJz8nKSB8fCB1cmwuZW5kc193aXRoKCcvJykgewogICAgICAgIHVybC50b19zdHJpbmcoKQogICAgfSBlbHNlIHsKICAgICAgICBmb3JtYXQhKCJ7dXJsfS8iKQogICAgfTsKICAgIGlmIGJhc2UuY29udGFpbnMoJz8nKSB7CiAgICAgICAgZm9ybWF0ISgie2Jhc2V9JnY9MTAmZW5jb2Rpbmc9anNvbiIpCiAgICB9IGVsc2UgewogICAgICAgIGZvcm1hdCEoIntiYXNlfT92PTEwJmVuY29kaW5nPWpzb24iKQogICAgfQp9JycnCgpzcmMgPSBzcmNbOnN0YXJ0XSArIG5ld19mbiArIHNyY1tlbmQgKyAyOl0KcGF0aC53cml0ZV90ZXh0KHNyYywgZW5jb2Rpbmc9J3V0Zi04JykKcHJpbnQoJ3BhdGNoIGFwcGxpZWQ6JywgcGF0aCk=' | base64 -d > /tmp/patch_discord.py
+          python3 /tmp/patch_discord.py
+          echo '--- patched function ---'
+          grep -n -A16 'fn with_gateway_query' backend/src/services/discord_bot.rs
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.backend
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            MYRIAD_VERSION=${{ inputs.tag }}
+            MYRIAD_COMMIT_SHA=${{ github.sha }}
+          tags: ghcr.io/${{ github.repository_owner }}/myriad-backend:${{ inputs.tag }}
